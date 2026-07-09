@@ -437,7 +437,7 @@ footer.ft{text-align:center;padding:34px 20px 90px;color:var(--ink-faint);font-s
     </div>
   </header>
   <main id="app" class="wrap"></main>
-  <footer class="ft"><div style="font-weight:800;color:var(--ink-soft);margin-bottom:4px">הוכן ע״י שימי · ניהול טכנולוגיה · בר-אילן</div><div style="margin-bottom:4px">מבוסס על חומרי הקורס של ד״ר גלית כהן-בוטבול</div>🧪 Stats Wizard Quest · כלי תרגול לא-רשמי · נבנה ללימוד למבחן · ההתקדמות נשמרת במכשיר שלך בלבד<div style="margin-top:6px;opacity:.7">גרסה 2026-07-09·ז · +76 שאלות חישוביות ברמת התרגולים/מבחן (כיוון הפוך, נתוני גלם, CI להפרש, Scheffé, טבלאות ANOVA/χ²) · התשובות שלך נשמרות גם אחרי רענון</div></footer>
+  <footer class="ft"><div style="font-weight:800;color:var(--ink-soft);margin-bottom:4px">הוכן ע״י שימי · ניהול טכנולוגיה · בר-אילן</div><div style="margin-bottom:4px">מבוסס על חומרי הקורס של ד״ר גלית כהן-בוטבול</div>🧪 Stats Wizard Quest · כלי תרגול לא-רשמי · נבנה ללימוד למבחן · ההתקדמות נשמרת במכשיר שלך בלבד<div style="margin-top:6px;opacity:.7">גרסה 2026-07-09·ח · "נסה שוב" לכל שאלה + איפוס בוחן · +76 שאלות חישוביות ברמת התרגולים/מבחן (כיוון הפוך, נתוני גלם, CI להפרש, Scheffé, טבלאות ANOVA/χ²) · התשובות שלך נשמרות גם אחרי רענון</div></footer>
   <div class="fab">
     <button onclick="SWQ.go('formulas')" title="דף נוסחאות"><span class="fe">📄</span><span>נוסחאות</span></button>
     <button onclick="SWQ.go('tables')" title="לוחות סטטיסטיים"><span class="fe">📖</span><span>לוחות</span></button>
@@ -2486,38 +2486,47 @@ function mountQuiz(host,questions,opts){
  opts=opts||{};
  const quizId=opts.topicId||opts.quizId||null;   // שמירת תשובות רק לבחנים עם מזהה
  const store=quizId?(ST.quizAnswers[quizId]||(ST.quizAnswers[quizId]={})):null;
- const answered=new Array(questions.length).fill(false);
- const correctArr=new Array(questions.length).fill(false);
- host.innerHTML=questions.map((q,i)=>questionCard(q,i,questions.length)).join('')+
-   `<div id="quizresult"></div>`;
- // wire each question
- questions.forEach((q,i)=>wireQuestion(host,q,i,(isRestore)=>{
-   answered[i]=true;
-   if(answered.every(Boolean))showQuizResult(isRestore);
- },(ok)=>{correctArr[i]=ok;},{store}));
- function showQuizResult(isRestore){
-   const nc=correctArr.filter(Boolean).length,sc=pct(nc,questions.length);
-   // update state
-   if(opts.topicId){const s=topicState(opts.topicId);s.best=Math.max(s.best,sc);if(sc>=80)s.done=true;save();updGlobalProgress();}
-   // diagnosis
-   const wrongTags={};questions.forEach((q,i)=>{if(!correctArr[i])(q.tags||[]).forEach(tg=>wrongTags[tg]=(wrongTags[tg]||0)+1);});
-   const tagRows=Object.keys(wrongTags).sort((a,b)=>wrongTags[b]-wrongTags[a]).map(tg=>
-     `<div class="row weak"><span>${MTAG[tg]||tg}</span><b>${wrongTags[tg]} טעויות</b></div>`).join('');
-   const emo=sc>=80?'🏆':sc>=60?'👍':'💪';
-   const msg=sc>=80?'מצוין! פתחת את הנושא הבא.':sc>=60?'כמעט שם — כדאי לחזור על הנקודות החלשות.':'שווה לחזור על התיאוריה ולנסות שוב.';
-   const host2=document.getElementById('quizresult');
-   host2.innerHTML=`<div class="qcard result">
-     <div class="big">${emo}</div>
-     <div class="scoreline">${nc} / ${questions.length} נכון · ${sc}%</div>
-     <p class="muted">${msg}</p>
-     ${tagRows?`<div class="diag"><div class="eyebrow" style="margin-bottom:6px">איפה נפלת</div>${tagRows}</div>`:'<div class="diag"><div class="row strong"><span>אין טעויות חוזרות — כל הכבוד!</span><b>💯</b></div></div>'}
-     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
-       <button class="btn ghost" onclick="renderTopicRetry('${opts.topicId||''}')">↻ נסה שוב</button>
-       <button class="btn" onclick="SWQ.go('home')">→ למפה</button>
-     </div>
-   </div>`;
-   if(!isRestore)host2.scrollIntoView({behavior:'smooth',block:'center'});
+ function resetOne(i){ if(store){delete store[i];save();} build(); }            // איפוס שאלה בודדת → ניסיון מחדש
+ function resetAll(){ if(store&&quizId){ST.quizAnswers[quizId]={};save();} build(); } // איפוס כל הבוחן
+ function build(){
+   const answered=new Array(questions.length).fill(false);
+   const correctArr=new Array(questions.length).fill(false);
+   const answeredCount=store?Object.keys(store).length:0;
+   const resetBar=store?`<div style="text-align:center;margin-bottom:12px"><button class="btn ghost sm" id="quizResetAll" type="button">↻ אפס את הבוחן ונסה מחדש</button>${answeredCount?`<span class="muted" style="font-size:12px;margin-inline-start:8px">ענית על ${answeredCount} שאלות</span>`:''}</div>`:'';
+   host.innerHTML=resetBar+questions.map((q,i)=>questionCard(q,i,questions.length)).join('')+
+     `<div id="quizresult"></div>`;
+   if(store){const rb=host.querySelector('#quizResetAll');if(rb)rb.onclick=()=>{if(confirm('לאפס את כל התשובות בבוחן הזה ולהתחיל מחדש?'))resetAll();};}
+   // wire each question
+   questions.forEach((q,i)=>wireQuestion(host,q,i,(isRestore)=>{
+     answered[i]=true;
+     if(answered.every(Boolean))showQuizResult(isRestore);
+   },(ok)=>{correctArr[i]=ok;},{store,onRetry:store?resetOne:null}));
+   function showQuizResult(isRestore){
+     const nc=correctArr.filter(Boolean).length,sc=pct(nc,questions.length);
+     // update state
+     if(opts.topicId){const s=topicState(opts.topicId);s.best=Math.max(s.best,sc);if(sc>=80)s.done=true;save();updGlobalProgress();}
+     // diagnosis
+     const wrongTags={};questions.forEach((q,i)=>{if(!correctArr[i])(q.tags||[]).forEach(tg=>wrongTags[tg]=(wrongTags[tg]||0)+1);});
+     const tagRows=Object.keys(wrongTags).sort((a,b)=>wrongTags[b]-wrongTags[a]).map(tg=>
+       `<div class="row weak"><span>${MTAG[tg]||tg}</span><b>${wrongTags[tg]} טעויות</b></div>`).join('');
+     const emo=sc>=80?'🏆':sc>=60?'👍':'💪';
+     const msg=sc>=80?'מצוין! פתחת את הנושא הבא.':sc>=60?'כמעט שם — כדאי לחזור על הנקודות החלשות.':'שווה לחזור על התיאוריה ולנסות שוב.';
+     const host2=document.getElementById('quizresult');
+     host2.innerHTML=`<div class="qcard result">
+       <div class="big">${emo}</div>
+       <div class="scoreline">${nc} / ${questions.length} נכון · ${sc}%</div>
+       <p class="muted">${msg}</p>
+       ${tagRows?`<div class="diag"><div class="eyebrow" style="margin-bottom:6px">איפה נפלת</div>${tagRows}</div>`:'<div class="diag"><div class="row strong"><span>אין טעויות חוזרות — כל הכבוד!</span><b>💯</b></div></div>'}
+       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px">
+         ${store?`<button class="btn ghost" id="quizResultRetry" type="button">↻ נסה את הבוחן מחדש</button>`:''}
+         <button class="btn" onclick="SWQ.go('home')">→ למפה</button>
+       </div>
+     </div>`;
+     if(store){const rr=host2.querySelector('#quizResultRetry');if(rr)rr.onclick=()=>{if(confirm('לאפס את כל התשובות בבוחן הזה ולהתחיל מחדש?'))resetAll();};}
+     if(!isRestore)host2.scrollIntoView({behavior:'smooth',block:'center'});
+   }
  }
+ build();
 }
 function renderTopicRetry(id){
  if(id){if(ST.quizAnswers&&ST.quizAnswers[id]){delete ST.quizAnswers[id];save();}renderTopic(id);}
@@ -2632,13 +2641,16 @@ function wireQuestion(host,q,i,onDone,report,persist){
    if(!ok&&!isRestore)(q.tags||[]).forEach(tg=>addMistake(tg));
    if(!isRestore)save();
    const single=parts.length===1&&(q.type==='mc'||q.type==='tf'||(q.opts&&!q.type));
+   const canRetry=persist&&persist.onRetry;
    const sw=card.querySelector('.solvewrap');
    sw.innerHTML=`<div class="solve ${ok?'good':'bad'}">
      <h4>${ok?'🎉 תשובה נכונה!':'📝 הפתרון'}</h4>
      ${steps.length?`<ol>${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol>`:''}
      <div class="why">${q.explain||''}</div>
      ${single?distractorHTML(q,parts[0].correct):''}
+     ${canRetry?`<div style="text-align:center;margin-top:12px"><button class="btn ghost sm retry-q" type="button">↻ נסה שוב את השאלה</button></div>`:''}
    </div>`;
+   if(canRetry){const rb=sw.querySelector('.retry-q');if(rb)rb.onclick=()=>persist.onRetry(i);}
    report(ok);onDone(isRestore);
  }
  // שחזור תשובות שמורות (בלי לספור טעויות מחדש)
