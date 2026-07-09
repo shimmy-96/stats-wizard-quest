@@ -1071,9 +1071,9 @@ TOPICS.unshift(
   {type:'num',q:'μ=70, σ=10, תצפית X=85. חשב את ציון התקן Z של התצפית.',
    fields:[{lbl:'Z',ans:1.5,tol:0.01}],steps:['Z = (X−μ)/σ = (85−70)/10 = 1.5'],
    explain:'לתצפית בודדת מחלקים ב-σ (לא ב-SE).',tags:['sd_vs_se']},
-  {type:'mc',q:'ממוצע התפלגות הדגימה של הממוצע מסומן μ_x̄. מה ה-Z של ממוצע מדגם x̄?',
+  {type:'mc',q:`ממוצע התפלגות הדגימה של הממוצע הוא ${mq('μ<sub>x̄</sub> = μ')}. כיצד מחשבים את ציון התקן Z של <b>ממוצע מדגם</b> x̄ (ולא של תצפית בודדת)?`,
    opts:['(x̄−μ)/σ','(x̄−μ)/(σ/√n)','(x̄−μ)/n','(x̄−μ)·√n'],correct:1,
-   explain:'לממוצע מדגם המכנה הוא טעות התקן SE=σ/√n, לא σ.',tags:['sd_vs_se','sampling_dist']},
+   explain:'לממוצע מדגם המכנה הוא טעות התקן SE=σ/√n, לא σ. (לתצפית בודדת מחלקים ב-σ.)',tags:['sd_vs_se','sampling_dist']},
   {type:'num',q:'לפי לוח Z: מהו השטח מימין ל-z=1.96? (הזן כשבר עשרוני)',
    fields:[{lbl:'P(Z>1.96)',ans:0.025,tol:0.005}],steps:['P(Z≤1.96)=0.975','P(Z>1.96)=1−0.975=0.025'],
    explain:'הלוח נותן שטח שמאלי מצטבר; לזנב ימני מחסרים מ-1.',tags:['crit_value']},
@@ -1699,25 +1699,48 @@ function mountQuiz(host,questions,opts){
 }
 function renderTopicRetry(id){if(id)renderTopic(id);else SWQ.route();}
 
-function questionCard(q,i,total){
- let body='';
- if(q.type==='mc'||q.type==='tf'||(q.opts&&!q.type)){
-   const opts=q.type==='tf'?['נכון','לא נכון']:q.opts;
-   body=`<div class="opts" data-q="${i}">${opts.map((o,j)=>
-     `<button class="opt" data-i="${j}"><span class="mk"></span><span>${o}</span></button>`).join('')}</div>`;
- } else { // num / multi
-   const fields=(q.fields||[]).length?`<div class="fields">${q.fields.map((f,j)=>`<span class="lbl">${f.lbl}:</span><input type="text" inputmode="decimal" data-f="${j}" placeholder="תשובה"><span class="res" data-r="${j}"></span>`).join('')}</div>`:'';
-   let choice='';
-   if(q.choice){choice=`<div style="margin-top:8px"><div class="lbl" style="margin-bottom:6px">${q.choice.lbl}</div>
-     <div class="opts" data-q="${i}">${q.choice.opts.map((o,j)=>`<button class="opt" data-i="${j}"><span class="mk"></span><span>${o}</span></button>`).join('')}</div></div>`;}
-   body=fields+choice;
+/* מציג מספר יפה (עד 3 ספרות אחרי הנקודה, בלי אפסים מיותרים) */
+function fmtNum(x){
+ if(!isFinite(x))return String(x);
+ let r=Math.round(x*1000)/1000;
+ if(Math.abs(r-Math.round(r))<1e-9)return String(Math.round(r));
+ return String(r);
+}
+/* יוצר אופציות מספריות (התשובה הנכונה + מסיחים סבירים), מעורבב */
+function genNumOpts(a){
+ const seen=new Set([fmtNum(a)]),ds=[];
+ const push=v=>{if(!isFinite(v))return;const k=fmtNum(v);if(!seen.has(k)){seen.add(k);ds.push(v);}};
+ [2,0.5,1.5,3,0.25].forEach(m=>push(a*m));
+ [1,-1,2,-2].forEach(d=>push(a+d));
+ const all=[a,...ds.slice(0,4)].map(fmtNum);
+ const idx=all.map((_,i)=>i);
+ for(let i=idx.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[idx[i],idx[j]]=[idx[j],idx[i]];}
+ return{options:idx.map(i=>all[i]),correct:idx.indexOf(0)};
+}
+/* מפרק שאלה לחלקים — כל חלק הוא קבוצת כפתורים אחת (בחירה יחידה) */
+function qParts(q){
+ if(q.__parts)return q.__parts;
+ let parts=[];
+ if(q.type==='tf'){parts=[{options:['נכון','לא נכון'],correct:q.correct?0:1}];}
+ else if(q.type==='mc'||(q.opts&&!q.type)){parts=[{options:q.opts,correct:q.correct}];}
+ else{ // num / multi → כל שדה מספרי הופך לקבוצת אופציות
+   (q.fields||[]).forEach(f=>{const g=genNumOpts(f.ans);parts.push({lbl:f.lbl,options:g.options,correct:g.correct});});
+   if(q.choice)parts.push({lbl:q.choice.lbl,options:q.choice.opts,correct:q.choice.correct});
  }
+ q.__parts=parts;return parts;
+}
+function questionCard(q,i,total){
+ const parts=qParts(q);
+ const body=parts.map((p,pi)=>`${p.lbl?`<div class="lbl" style="margin:12px 0 6px">${p.lbl}:</div>`:''}
+   <div class="opts" data-part="${pi}">${p.options.map((o,j)=>
+     `<button class="opt" data-i="${j}"><span class="mk"></span><span>${o}</span></button>`).join('')}</div>`).join('');
  const tag=(q.tags&&q.tags[0])?`<span class="chip qtag ${q.type==='tf'?'grape':''}">${MTAG[q.tags[0]]||q.tags[0]}</span>`:'';
+ const hint=parts.length>1?'<span class="qnum" style="opacity:.7">בחר תשובה בכל שורה</span>':'';
  return `<div class="qcard" data-qi="${i}">
    <div class="qhead"><span class="qnum">שאלה ${i+1} / ${total}</span>${tag}</div>
    <div class="qtext">${q.q}</div>
    ${body}
-   <div class="qfoot"><button class="btn sm check" data-qi="${i}">✅ בדיקה</button></div>
+   ${hint?`<div class="qfoot">${hint}</div>`:''}
    <div class="solvewrap"></div>
  </div>`;
 }
@@ -1749,53 +1772,35 @@ function distractorHTML(q,correct){
 }
 function wireQuestion(host,q,i,onDone,report){
  const card=host.querySelector(`.qcard[data-qi="${i}"]`);
- let selChoice=null,optCorrect=null;
- // option selection (mc/tf/choice)
- card.querySelectorAll('.opts .opt').forEach(btn=>btn.onclick=()=>{
-   if(card.dataset.locked)return;
-   card.querySelectorAll('.opts .opt').forEach(o=>o.classList.remove('sel'));
-   btn.classList.add('sel');selChoice=+btn.dataset.i;
+ const parts=qParts(q);
+ const partDone=new Array(parts.length).fill(false);
+ const partOk=new Array(parts.length).fill(false);
+ card.querySelectorAll('.opts').forEach(grp=>{
+   const pi=+grp.dataset.part,part=parts[pi];
+   grp.querySelectorAll('.opt').forEach(btn=>btn.onclick=()=>{
+     if(partDone[pi])return;              // כל חלק נבדק פעם אחת, בלחיצה
+     partDone[pi]=true;
+     const sel=+btn.dataset.i,ok=sel===part.correct;
+     partOk[pi]=ok;
+     grp.querySelectorAll('.opt').forEach(o=>{const j=+o.dataset.i;o.classList.add('disabled');
+       if(j===part.correct)o.classList.add('correct');else if(j===sel)o.classList.add('wrong');});
+     if(partDone.every(Boolean))finalize();
+   });
  });
- card.querySelector('.check').onclick=()=>{
-   if(card.dataset.locked)return;
-   let ok=true;const steps=q.steps||[];
-   if(q.type==='mc'||q.type==='tf'||(q.opts&&!q.type)){
-     const correct=q.type==='tf'?(q.correct?0:1):q.correct;
-     optCorrect=correct;
-     if(selChoice===null){flash(card);return;}
-     ok=(selChoice===correct);
-     card.querySelectorAll('.opts .opt').forEach(o=>{const j=+o.dataset.i;o.classList.add('disabled');
-       if(j===correct)o.classList.add('correct');else if(j===selChoice)o.classList.add('wrong');});
-   } else {
-     // numeric fields
-     (q.fields||[]).forEach((f,j)=>{
-       const inp=card.querySelector(`input[data-f="${j}"]`);const res=card.querySelector(`.res[data-r="${j}"]`);
-       const val=parseFloat(String(inp.value).replace(',','.').trim());
-       const good=isFinite(val)&&Math.abs(val-f.ans)<=(f.tol!=null?f.tol:0.01);
-       if(!good)ok=false;
-       inp.style.borderColor=good?'var(--good)':'var(--bad)';
-       res.innerHTML=good?'<span class="ok">✓</span>':`<span class="no">✗ (${f.ans})</span>`;
-       inp.disabled=true;
-     });
-     if(q.choice){
-       if(selChoice===null){ok=false;}
-       card.querySelectorAll('.opts .opt').forEach(o=>{const jj=+o.dataset.i;o.classList.add('disabled');
-         if(jj===q.choice.correct)o.classList.add('correct');else if(jj===selChoice)o.classList.add('wrong');});
-       if(selChoice!==q.choice.correct)ok=false;
-     }
-   }
+ function finalize(){
+   const ok=partOk.every(Boolean),steps=q.steps||[];
    card.dataset.locked='1';
-   card.querySelector('.check').style.display='none';
    if(!ok)(q.tags||[]).forEach(tg=>addMistake(tg));save();
+   const single=parts.length===1&&(q.type==='mc'||q.type==='tf'||(q.opts&&!q.type));
    const sw=card.querySelector('.solvewrap');
    sw.innerHTML=`<div class="solve ${ok?'good':'bad'}">
      <h4>${ok?'🎉 תשובה נכונה!':'📝 הפתרון'}</h4>
      ${steps.length?`<ol>${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol>`:''}
      <div class="why">${q.explain||''}</div>
-     ${distractorHTML(q,optCorrect)}
+     ${single?distractorHTML(q,parts[0].correct):''}
    </div>`;
    report(ok);onDone();
- };
+ }
 }
 function flash(card){card.style.transition='none';card.style.boxShadow='0 0 0 2px var(--gold)';setTimeout(()=>{card.style.transition='';card.style.boxShadow='';},400);}
 
