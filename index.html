@@ -458,7 +458,7 @@ const SUP={'2':'²','1':'¹','0':'⁰'};
 const LS='swq_state_v1';
 let ST=normalizeState(load());
 function load(){try{return JSON.parse(localStorage.getItem(LS))||fresh();}catch(e){return fresh();}}
-function fresh(){return{theme:null,topics:{},mistakes:{},examBest:null,detail:'full',flashcards:{seen:{},known:0,missed:0},quizAnswers:{}};}
+function fresh(){return{theme:null,topics:{},mistakes:{},examBest:null,blitzBest:0,detail:'full',flashcards:{seen:{},known:0,missed:0},quizAnswers:{}};}
 function normalizeState(s){
  s=s||fresh();
  if(!s.topics)s.topics={};
@@ -2260,6 +2260,7 @@ const SWQ={
    if(view==='mistakes')return renderMistakes();
    if(view==='examkit')return renderExamKit();
    if(view==='coach')return renderCoach();
+   if(view==='blitz'){if(BZ&&BZ.timer)clearInterval(BZ.timer);BZ=null;return renderBlitz();}
    if(view==='flashcards')return renderFlashcards(param||'all');
    if(view==='search')return renderSearch();
    if(view==='print')return renderPrintSheet();
@@ -2308,6 +2309,7 @@ function renderHome(){
      </span>
    </button>`;}).join('');
  const tools=[
+   ['blitz','🎮','קרב הזיהוי','משחק על זמן · שיא אישי'],
    ['tree','🧭','איזה מבחן לבחור?','עץ החלטה חי'],
    ['examkit','🎯','רגע לפני מבחן','כללי זהב + נוסחים'],
    ['coach','🧪','מאמן בחירת מבחן','תרחישי מחקר קצרים'],
@@ -3075,6 +3077,184 @@ function renderCoach(){
    <div style="height:24px"></div>
  </div>`;
  mountQuiz(document.getElementById('coachhost'),TEST_COACH,{});
+}
+
+/* =================== BLITZ — משחק זיהוי המבחן =================== */
+/* כל פריט: s=תרחיש, a=המבחן הנכון, w=למה (הסבר קצר), tag=לאבחון הטעויות */
+const BLITZ_TESTS=['Z לממוצע יחיד','t לממוצע יחיד','t למדגמים תלויים','t למדגמים בלתי-תלויים',
+ 'ANOVA חד-כיווני','ANOVA דו-כיווני','מתאם פירסון','מתאם ספירמן','רגרסיה ליניארית',
+ 'χ² לטיב התאמה','χ² לאי-תלות','Scheffé','φ (פי)','V של קרמר'];
+
+const BLITZ=[
+ {s:'ממוצע החרדה של פוליטיקאים מול כלל הציבור. ידוע: μ=7, <b>σ=2</b>.',a:'Z לממוצע יחיד',w:'מדגם אחד מול ערך ידוע, ו-σ של האוכלוסייה <b>ידועה</b> → Z.',tag:'z_vs_t'},
+ {s:'ממוצע הציונים בקורס גבוה מ-80? נתונה סטיית תקן <b>של המדגם</b> בלבד.',a:'t לממוצע יחיד',w:'מדגם אחד מול ערך, אבל σ <b>לא</b> ידועה → t. גם ב-n גדול.',tag:'z_vs_t'},
+ {s:'n=250. ממוצע מול ערך ידוע. σ של האוכלוסייה <b>לא</b> ידועה.',a:'t לממוצע יחיד',w:'מלכודת גודל המדגם: n גדול לא הופך t ל-Z. רק σ ידועה עושה זאת.',tag:'z_vs_t'},
+ {s:'ריכוז של <b>אותם נבדקים</b> לפני ואחרי שתיית קפה.',a:'t למדגמים תלויים',w:'מדידה חוזרת → עובדים על ההפרשים d, df=n−1 (זוגות).',tag:'paired_vs_independent'},
+ {s:'"האם יש <b>קשר</b> בין ריכוז לשעות שינה? אותם נבדקים ישנו 8 שעות ביום א׳ ו-4 ביום ב׳."',a:'t למדגמים תלויים',w:'המילה "קשר" מטעה — אלה אותם נבדקים בשני תנאים → t תלויים, לא פירסון.',tag:'paired_vs_independent'},
+ {s:'20 עובדים נמדדו לפני הכשרה ואחרי. מה n?',a:'t למדגמים תלויים',w:'n=20 (מספר <b>הזוגות</b>), לא 40. df=19.',tag:'df_error'},
+ {s:'האם שכר הגברים הממוצע גבוה משכר הנשים?',a:'t למדגמים בלתי-תלויים',w:'שכר=כמותי · מגדר=שמי דיכוטומי · שתי קבוצות נפרדות. חד-זנבי. קודם Levene.',tag:'wrong_test'},
+ {s:'קבוצת טיפול מול קבוצת ביקורת, משתנה תלוי כמותי. Levene יצא p=0.31.',a:'t למדגמים בלתי-תלויים',w:'p>0.05 → לא דוחים שוויון שונויות → t עם שונות משותפת (pooled).',tag:'levene_row'},
+ {s:'שתי קבוצות נפרדות, Levene יצא <b>p=0.002</b>.',a:'t למדגמים בלתי-תלויים',w:'p≤0.05 → השונויות שונות → גרסת Welch (בלי שונות משותפת).',tag:'pooled_vs_welch'},
+ {s:'הבדל בתפקוד קוגניטיבי בין חשיש / קוקאין / אקסטזי.',a:'ANOVA חד-כיווני',w:'כמותי + שמי <b>פוליטומי</b> (3 קבוצות) · גורם אחד → ANOVA חד-כיווני.',tag:'wrong_test'},
+ {s:'הבדל ברמת חרדה בין 4 מחלקות. למה לא שישה מבחני t?',a:'ANOVA חד-כיווני',w:'הרבה מבחני t מנפחים את הסיכון לטעות מסוג I. ANOVA בודק הכל במכה אחת ושומר על α.',tag:'anova_posthoc'},
+ {s:'ANOVA חד-כיווני יצא <b>מובהק</b>. רוצים לדעת אילו זוגות שונים.',a:'Scheffé',w:'ANOVA אומר <i>האם</i> יש הבדל. Scheffé אומר <i>איפה</i>. F′c = Fc·(k−1).',tag:'anova_posthoc'},
+ {s:'ANOVA יצא מובהק. מה מותר להסיק?',a:'ANOVA חד-כיווני',w:'רק ש<b>לפחות שתי</b> קבוצות שונות — לא שכולן שונות זו מזו.',tag:'conclusion_wording'},
+ {s:'גודל הדג כפונקציה של סוג פיתיון (3 סוגים) ומגדר הדייג.',a:'ANOVA דו-כיווני',w:'כמותי + <b>שני</b> גורמים שמיים → 2 אפקטים עיקריים + אינטראקציה.',tag:'interaction'},
+ {s:'סכום ההוצאה בשקלים לפי סוג האוכל וחברת המשלוחים.',a:'ANOVA דו-כיווני',w:'משתנה תלוי כמותי + שני משתנים ב"ת קטגוריאליים.',tag:'wrong_test'},
+ {s:'בגרף האינטראקציה הקווים <b>מצטלבים</b>.',a:'ANOVA דו-כיווני',w:'קווים מקבילים=אין אינטראקציה · לא מקבילים=אפשרית · מצטלבים=חזקה. כל p-value נקרא בנפרד.',tag:'interaction'},
+ {s:'קשר בין מספר שעות שינה לבין הציון במבחן.',a:'מתאם פירסון',w:'שני משתנים כמותיים, שאלת קשר ליניארי → r.',tag:'wrong_test'},
+ {s:'קשר בין מספר נמשים לדקות חשיפה לשמש ביום.',a:'מתאם פירסון',w:'שניהם כמותיים → פירסון. df=n−2.',tag:'wrong_test'},
+ {s:'r=0.35 ו-p&lt;0.001 במדגם של 5000. הקשר <b>חזק</b>?',a:'מתאם פירסון',w:'לא! מובהק ≠ חזק. R²=0.1225 → רק ~12% מהשונות מוסברת. מדגם גדול הופך גם קשר קטן למובהק.',tag:'r_vs_r_squared'},
+ {s:'קשר בין רמת השכלה (נמוכה/בינונית/גבוהה) לשביעות רצון (נמוכה/בינונית/גבוהה).',a:'מתאם ספירמן',w:'שני משתנים <b>סדריים</b> → ספירמן, לא פירסון.',tag:'wrong_test'},
+ {s:'קשר בין דירוג שירות (מקום 1/2/3) לבין ותק בשנים.',a:'מתאם ספירמן',w:'סדר + כמותי → ספירמן. מספיק שאחד סדרי.',tag:'wrong_test'},
+ {s:'האם שעות שינה <b>מנבאות</b> את הציון, ובכמה נקודות לכל שעה?',a:'רגרסיה ליניארית',w:'"מנבא" + "בכמה" → צריך משוואה Ŷ=a+bX. פירסון נותן רק r.',tag:'wrong_test'},
+ {s:'בפלט: Coefficient של X = 0.057, P-value = 0.03.',a:'רגרסיה ליניארית',w:'השיפוע מובהק (p≤0.05): כל עלייה ביחידה אחת ב-X מנבאת עלייה של 0.057 ב-Y.',tag:'wrong_test'},
+ {s:'האם התפלגות הסטודנטים בין המחלקות היא 30%/20%/10%/20%/20%?',a:'χ² לטיב התאמה',w:'משתנה שמי <b>אחד</b> מול אחוזים צפויים. E=p·N, df=k−1.',tag:'chi_expected'},
+ {s:'זורקים קובייה 600 פעם. האם היא הוגנת?',a:'χ² לטיב התאמה',w:'משתנה שמי אחד (תוצאת הקובייה) מול התפלגות צפויה אחידה. E=100 לכל פאה.',tag:'chi_expected'},
+ {s:'"האם יש <b>קשר</b> בין למידה למבחן (כן/לא) לבין מעבר המבחן (כן/לא)?"',a:'χ² לאי-תלות',w:'"קשר" מטעה — שני משתנים <b>שמיים</b> → χ² לאי-תלות, לא פירסון. df=(r−1)(c−1).',tag:'wrong_test'},
+ {s:'קשר בין מגדר לבין מעבר מבחן. איך מחשבים E לכל תא?',a:'χ² לאי-תלות',w:'E = (סכום שורה × סכום עמודה) / N.',tag:'chi_expected'},
+ {s:'עשינו χ² לאי-תלות על טבלת <b>2×2</b>. רוצים <b>עוצמת</b> קשר.',a:'φ (פי)',w:'χ² אומר אם יש קשר מובהק · φ אומר כמה הוא חזק. רק ל-2×2.',tag:'cramers_phi'},
+ {s:'χ² לאי-תלות על טבלת <b>2×3</b> (יליד הארץ/עולה × השכלה נמוכה/בינונית/גבוהה). רוצים עוצמה.',a:'V של קרמר',w:'הטבלה גדולה מ-2×2 → קרמר, לא φ. V=√(χ²/(n(L−1))).',tag:'cramers_phi'},
+ {s:'קיבלנו χ² = −3.2.',a:'χ² לאי-תלות',w:'בלתי אפשרי! (O−E)² תמיד ≥0, לכן χ²≥0 תמיד. χ²=0 רק אם O=E בכל תא.',tag:'chi_df'}
+];
+
+let BZ=null;
+function blitzBest(){return (ST.blitzBest|0)||0;}
+function renderBlitz(){
+ const best=blitzBest();
+ app.innerHTML=`<div class="view">
+   <div class="backrow"><button class="btn ghost sm" onclick="SWQ.go('home')">→ למפה</button><span class="chip">🎮 קרב הזיהוי</span></div>
+   <h1 style="margin:6px 0">🎮 קרב הזיהוי</h1>
+   <p class="muted">30 שניות על השעון. תרחיש קופץ — אתה בוחר את המבחן. תשובה נכונה מוסיפה 2 שניות ומעלה את מכפיל הרצף. שלוש טעויות והמשחק נגמר.</p>
+   <div class="note tip">זה בדיוק מה שנבדק ב-16 שאלות חלק א׳: <b>זיהוי</b>, לא חישוב. חשוב במהירות: מה המשתנה התלוי? מה הסולם? כמה קבוצות? תלויים?</div>
+   <div class="dash" style="margin-top:14px">
+     <section class="focus-card">
+       <div class="eyebrow">השיא שלך</div>
+       <h2 style="font-size:34px">${best?best+' נק׳':'עדיין אין'}</h2>
+       <p>${BLITZ.length} תרחישים · 3 חיים · מכפיל רצף עד ×5 · כל תשובה נכונה מוסיפה 2 שניות.</p>
+       <div class="action-row">
+         <button class="btn" onclick="blitzStart()">▶ התחל קרב</button>
+         <button class="btn ghost" onclick="SWQ.go('coach')">🧪 מאמן רגוע (בלי טיימר)</button>
+       </div>
+     </section>
+   </div>
+   <div style="height:24px"></div>
+ </div>`;
+}
+
+function blitzStart(){
+ const order=BLITZ.map((q,i)=>i);
+ for(let i=order.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[order[i],order[j]]=[order[j],order[i]];}
+ BZ={order,pos:0,score:0,lives:3,streak:0,bestStreak:0,right:0,wrong:0,t:30,timer:null,locked:false};
+ BZ.timer=setInterval(blitzTick,100);
+ blitzQuestion();
+}
+function blitzTick(){
+ if(!BZ)return;
+ BZ.t-=0.1;
+ if(BZ.t<=0){BZ.t=0;return blitzEnd('נגמר הזמן');}
+ const bar=document.getElementById('bzbar'),num=document.getElementById('bztime');
+ if(bar)bar.style.width=Math.max(0,Math.min(100,BZ.t/30*100))+'%';
+ if(num)num.textContent=BZ.t.toFixed(1);
+}
+function blitzMult(){return Math.min(1+Math.floor(BZ.streak/3),5);}
+function blitzOptions(correct){
+ const pool=BLITZ_TESTS.filter(t=>t!==correct);
+ for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
+ const opts=[correct,pool[0],pool[1],pool[2]];
+ for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
+ return opts;
+}
+function blitzQuestion(){
+ if(!BZ)return;
+ if(BZ.pos>=BZ.order.length)return blitzEnd('סיימת את כל התרחישים!');
+ BZ.locked=false;
+ const q=BLITZ[BZ.order[BZ.pos]];
+ const opts=blitzOptions(q.a);
+ const m=blitzMult();
+ app.innerHTML=`<div class="view">
+   <div class="backrow"><button class="btn ghost sm" onclick="blitzQuit()">→ עצור</button><span class="chip">🎮 קרב הזיהוי</span></div>
+   <div class="action-row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+     <span class="chip grape">ניקוד ${BZ.score}</span>
+     <span class="chip">${'❤️'.repeat(BZ.lives)}${'🖤'.repeat(3-BZ.lives)}</span>
+     <span class="chip" style="color:${m>1?'var(--gold)':''}">רצף ${BZ.streak} · ×${m}</span>
+     <span class="chip">${BZ.pos+1}/${BZ.order.length}</span>
+   </div>
+   <div style="height:8px;border-radius:99px;background:rgba(128,128,128,.2);overflow:hidden;margin:10px 0 4px">
+     <div id="bzbar" style="height:100%;width:100%;background:linear-gradient(90deg,var(--teal),var(--gold));transition:width .1s linear"></div>
+   </div>
+   <div class="muted" style="text-align:left;font-variant-numeric:tabular-nums">⏱ <span id="bztime">${BZ.t.toFixed(1)}</span>s</div>
+   <section class="focus-card" style="margin-top:14px">
+     <div class="eyebrow">איזה מבחן זה?</div>
+     <h2 style="font-size:20px;line-height:1.55">${q.s}</h2>
+   </section>
+   <div id="bzopts" style="display:grid;gap:10px;margin-top:14px">
+     ${opts.map(o=>`<button class="btn ghost" style="text-align:right;padding:14px 16px;font-size:16px" onclick="blitzAnswer(this,'${o.replace(/'/g,"\\'")}')">${o}</button>`).join('')}
+   </div>
+   <div id="bzfb" style="margin-top:12px"></div>
+   <div style="height:24px"></div>
+ </div>`;
+}
+function blitzAnswer(btn,choice){
+ if(!BZ||BZ.locked)return;
+ BZ.locked=true;
+ const q=BLITZ[BZ.order[BZ.pos]];
+ const ok=choice===q.a;
+ document.querySelectorAll('#bzopts button').forEach(b=>{b.disabled=true;b.style.opacity='.55';});
+ btn.style.opacity='1';
+ if(ok){
+   const gained=10*blitzMult();
+   BZ.score+=gained;BZ.streak++;BZ.right++;
+   if(BZ.streak>BZ.bestStreak)BZ.bestStreak=BZ.streak;
+   BZ.t=Math.min(30,BZ.t+2);
+   btn.style.background='var(--good)';btn.style.color='#fff';
+   document.getElementById('bzfb').innerHTML=`<div class="note tip">✅ נכון · +${gained} נק׳ · +2 שניות<br>${q.w}</div>`;
+ }else{
+   BZ.lives--;BZ.streak=0;BZ.wrong++;
+   addMistake(q.tag,1);save();
+   btn.style.background='var(--bad,#c0392b)';btn.style.color='#fff';
+   document.querySelectorAll('#bzopts button').forEach(b=>{if(b.textContent.trim()===q.a){b.style.opacity='1';b.style.borderColor='var(--good)';b.style.color='var(--good)';}});
+   document.getElementById('bzfb').innerHTML=`<div class="note">❌ התשובה: <b>${q.a}</b><br>${q.w}</div>`;
+ }
+ setTimeout(()=>{
+   if(!BZ)return;
+   if(BZ.lives<=0)return blitzEnd('נגמרו החיים');
+   BZ.pos++;blitzQuestion();
+ },ok?1200:2600);
+}
+function blitzQuit(){if(BZ&&BZ.timer)clearInterval(BZ.timer);BZ=null;SWQ.go('blitz');}
+function blitzEnd(reason){
+ if(!BZ)return;
+ if(BZ.timer)clearInterval(BZ.timer);
+ const {score,right,wrong,bestStreak}=BZ;
+ const prevBest=blitzBest();
+ const isRecord=score>prevBest;
+ if(isRecord){ST.blitzBest=score;save();}
+ BZ=null;
+ const total=right+wrong;
+ const acc=total?Math.round(right/total*100):0;
+ const weak=Object.keys(ST.mistakes||{}).filter(t=>(ST.mistakes[t]||0)>0).sort((a,b)=>ST.mistakes[b]-ST.mistakes[a]).slice(0,3);
+ app.innerHTML=`<div class="view">
+   <div class="backrow"><button class="btn ghost sm" onclick="SWQ.go('home')">→ למפה</button><span class="chip">🎮 קרב הזיהוי</span></div>
+   <section class="focus-card" style="margin-top:14px;text-align:center">
+     <div class="eyebrow">${reason}</div>
+     <h1 style="font-size:52px;margin:6px 0">${score}</h1>
+     <p>${isRecord?'🏆 <b>שיא אישי חדש!</b>':'השיא שלך: <b>'+prevBest+'</b>'}</p>
+     <div class="action-row" style="justify-content:center;flex-wrap:wrap">
+       <span class="chip" style="color:var(--good)">✅ ${right} נכונות</span>
+       <span class="chip">❌ ${wrong} שגויות</span>
+       <span class="chip grape">🎯 דיוק ${acc}%</span>
+       <span class="chip" style="color:var(--gold)">🔥 רצף שיא ${bestStreak}</span>
+     </div>
+   </section>
+   ${weak.length?`<div class="note" style="margin-top:14px"><b>הנושאים שהכי מפילים אותך:</b> ${weak.map(t=>MTAG[t]||t).join(' · ')}. שווה לפתוח את האבחון.</div>`:''}
+   <div class="action-row" style="margin-top:14px">
+     <button class="btn" onclick="blitzStart()">🔄 עוד קרב</button>
+     ${weak.length?`<button class="btn ghost" onclick="SWQ.go('mistakes')">🧠 לאבחון הטעויות</button>`:''}
+     <button class="btn ghost" onclick="SWQ.go('tree')">🧭 עץ החלטה</button>
+   </div>
+   <div style="height:24px"></div>
+ </div>`;
 }
 
 function renderPrintSheet(){
