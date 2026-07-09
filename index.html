@@ -437,7 +437,7 @@ footer.ft{text-align:center;padding:34px 20px 90px;color:var(--ink-faint);font-s
     </div>
   </header>
   <main id="app" class="wrap"></main>
-  <footer class="ft"><div style="font-weight:800;color:var(--ink-soft);margin-bottom:4px">הוכן ע״י שימי · ניהול טכנולוגיה · בר-אילן</div><div style="margin-bottom:4px">מבוסס על חומרי הקורס של ד״ר גלית כהן-בוטבול</div>🧪 Stats Wizard Quest · כלי תרגול לא-רשמי · נבנה ללימוד למבחן · ההתקדמות נשמרת במכשיר שלך בלבד</footer>
+  <footer class="ft"><div style="font-weight:800;color:var(--ink-soft);margin-bottom:4px">הוכן ע״י שימי · ניהול טכנולוגיה · בר-אילן</div><div style="margin-bottom:4px">מבוסס על חומרי הקורס של ד״ר גלית כהן-בוטבול</div>🧪 Stats Wizard Quest · כלי תרגול לא-רשמי · נבנה ללימוד למבחן · ההתקדמות נשמרת במכשיר שלך בלבד<div style="margin-top:6px;opacity:.7">גרסה 2026-07-09·ד · התשובות שלך נשמרות גם אחרי רענון</div></footer>
   <div class="fab">
     <button onclick="SWQ.go('formulas')" title="דף נוסחאות"><span class="fe">📄</span><span>נוסחאות</span></button>
     <button onclick="SWQ.go('tables')" title="לוחות סטטיסטיים"><span class="fe">📖</span><span>לוחות</span></button>
@@ -458,7 +458,7 @@ const SUP={'2':'²','1':'¹','0':'⁰'};
 const LS='swq_state_v1';
 let ST=normalizeState(load());
 function load(){try{return JSON.parse(localStorage.getItem(LS))||fresh();}catch(e){return fresh();}}
-function fresh(){return{theme:null,topics:{},mistakes:{},examBest:null,detail:'full',flashcards:{seen:{},known:0,missed:0}};}
+function fresh(){return{theme:null,topics:{},mistakes:{},examBest:null,detail:'full',flashcards:{seen:{},known:0,missed:0},quizAnswers:{}};}
 function normalizeState(s){
  s=s||fresh();
  if(!s.topics)s.topics={};
@@ -468,6 +468,7 @@ function normalizeState(s){
  if(!s.flashcards.seen)s.flashcards.seen={};
  if(!Number.isFinite(s.flashcards.known))s.flashcards.known=0;
  if(!Number.isFinite(s.flashcards.missed))s.flashcards.missed=0;
+ if(!s.quizAnswers)s.quizAnswers={};
  return s;
 }
 function save(){try{localStorage.setItem(LS,JSON.stringify(ST));}catch(e){}}
@@ -1718,16 +1719,18 @@ function renderTopic(id){
 /* =================== QUIZ ENGINE =================== */
 function mountQuiz(host,questions,opts){
  opts=opts||{};
+ const quizId=opts.topicId||opts.quizId||null;   // שמירת תשובות רק לבחנים עם מזהה
+ const store=quizId?(ST.quizAnswers[quizId]||(ST.quizAnswers[quizId]={})):null;
  const answered=new Array(questions.length).fill(false);
  const correctArr=new Array(questions.length).fill(false);
  host.innerHTML=questions.map((q,i)=>questionCard(q,i,questions.length)).join('')+
    `<div id="quizresult"></div>`;
  // wire each question
- questions.forEach((q,i)=>wireQuestion(host,q,i,()=>{
+ questions.forEach((q,i)=>wireQuestion(host,q,i,(isRestore)=>{
    answered[i]=true;
-   if(answered.every(Boolean))showQuizResult();
- },(ok)=>{correctArr[i]=ok;}));
- function showQuizResult(){
+   if(answered.every(Boolean))showQuizResult(isRestore);
+ },(ok)=>{correctArr[i]=ok;},{store}));
+ function showQuizResult(isRestore){
    const nc=correctArr.filter(Boolean).length,sc=pct(nc,questions.length);
    // update state
    if(opts.topicId){const s=topicState(opts.topicId);s.best=Math.max(s.best,sc);if(sc>=80)s.done=true;save();updGlobalProgress();}
@@ -1748,10 +1751,13 @@ function mountQuiz(host,questions,opts){
        <button class="btn" onclick="SWQ.go('home')">→ למפה</button>
      </div>
    </div>`;
-   host2.scrollIntoView({behavior:'smooth',block:'center'});
+   if(!isRestore)host2.scrollIntoView({behavior:'smooth',block:'center'});
  }
 }
-function renderTopicRetry(id){if(id)renderTopic(id);else SWQ.route();}
+function renderTopicRetry(id){
+ if(id){if(ST.quizAnswers&&ST.quizAnswers[id]){delete ST.quizAnswers[id];save();}renderTopic(id);}
+ else SWQ.route();
+}
 
 /* מציג מספר יפה (עד 3 ספרות אחרי הנקודה, בלי אפסים מיותרים) */
 function fmtNum(x){
@@ -1760,15 +1766,19 @@ function fmtNum(x){
  if(Math.abs(r-Math.round(r))<1e-9)return String(Math.round(r));
  return String(r);
 }
-/* יוצר אופציות מספריות (התשובה הנכונה + אפשרויות סבירות), מעורבב */
+function strHash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h||1;}
+/* יוצר אופציות מספריות (התשובה הנכונה + אפשרויות סבירות). הסדר דטרמיניסטי (seed מהתשובה)
+   כדי שהאופציות לא ישתנו בכל רענון — חיוני לשמירת/שחזור תשובות */
 function genNumOpts(a){
  const seen=new Set([fmtNum(a)]),ds=[];
  const push=v=>{if(!isFinite(v))return;const k=fmtNum(v);if(!seen.has(k)){seen.add(k);ds.push(v);}};
  [2,0.5,1.5,3,0.25].forEach(m=>push(a*m));
  [1,-1,2,-2].forEach(d=>push(a+d));
  const all=[a,...ds.slice(0,4)].map(fmtNum);
+ let seed=strHash(all.join('|'));
+ const rnd=()=>{seed=(Math.imul(seed,1103515245)+12345)&0x7fffffff;return seed/0x7fffffff;};
  const idx=all.map((_,i)=>i);
- for(let i=idx.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[idx[i],idx[j]]=[idx[j],idx[i]];}
+ for(let i=idx.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[idx[i],idx[j]]=[idx[j],idx[i]];}
  return{options:idx.map(i=>all[i]),correct:idx.indexOf(0)};
 }
 /* מפרק שאלה לחלקים — כל חלק הוא קבוצת כפתורים אחת (בחירה יחידה) */
@@ -1829,27 +1839,33 @@ function distractorHTML(q,correct){
    return `<div><span class="mq">${String.fromCharCode(1488+j)})</span> ${ok?'<b class="ok">נכון —</b>':'<span class="no">לא נכון —</span>'} ${txt}</div>`;
  }).join('')}</div>`;
 }
-function wireQuestion(host,q,i,onDone,report){
+function wireQuestion(host,q,i,onDone,report,persist){
  const card=host.querySelector(`.qcard[data-qi="${i}"]`);
  const parts=qParts(q);
  const partDone=new Array(parts.length).fill(false);
  const partOk=new Array(parts.length).fill(false);
+ const selArr=new Array(parts.length).fill(null);
+ const store=persist&&persist.store;
+ function choose(pi,selIdx,isRestore){
+   if(partDone[pi])return;                // כל חלק נבדק פעם אחת
+   const part=parts[pi];
+   partDone[pi]=true;selArr[pi]=selIdx;
+   partOk[pi]=(selIdx===part.correct);
+   const grp=card.querySelector(`.opts[data-part="${pi}"]`);
+   if(grp)grp.querySelectorAll('.opt').forEach(o=>{const j=+o.dataset.i;o.classList.add('disabled');
+     if(j===part.correct)o.classList.add('correct');else if(j===selIdx)o.classList.add('wrong');});
+   if(!isRestore&&store){store[i]={sel:selArr.slice()};save();}  // שמירת התשובה
+   if(partDone.every(Boolean))finalize(isRestore);
+ }
  card.querySelectorAll('.opts').forEach(grp=>{
-   const pi=+grp.dataset.part,part=parts[pi];
-   grp.querySelectorAll('.opt').forEach(btn=>btn.onclick=()=>{
-     if(partDone[pi])return;              // כל חלק נבדק פעם אחת, בלחיצה
-     partDone[pi]=true;
-     const sel=+btn.dataset.i,ok=sel===part.correct;
-     partOk[pi]=ok;
-     grp.querySelectorAll('.opt').forEach(o=>{const j=+o.dataset.i;o.classList.add('disabled');
-       if(j===part.correct)o.classList.add('correct');else if(j===sel)o.classList.add('wrong');});
-     if(partDone.every(Boolean))finalize();
-   });
+   const pi=+grp.dataset.part;
+   grp.querySelectorAll('.opt').forEach(btn=>btn.onclick=()=>choose(pi,+btn.dataset.i,false));
  });
- function finalize(){
+ function finalize(isRestore){
    const ok=partOk.every(Boolean),steps=q.steps||[];
    card.dataset.locked='1';
-   if(!ok)(q.tags||[]).forEach(tg=>addMistake(tg));save();
+   if(!ok&&!isRestore)(q.tags||[]).forEach(tg=>addMistake(tg));
+   if(!isRestore)save();
    const single=parts.length===1&&(q.type==='mc'||q.type==='tf'||(q.opts&&!q.type));
    const sw=card.querySelector('.solvewrap');
    sw.innerHTML=`<div class="solve ${ok?'good':'bad'}">
@@ -1858,8 +1874,11 @@ function wireQuestion(host,q,i,onDone,report){
      <div class="why">${q.explain||''}</div>
      ${single?distractorHTML(q,parts[0].correct):''}
    </div>`;
-   report(ok);onDone();
+   report(ok);onDone(isRestore);
  }
+ // שחזור תשובות שמורות (בלי לספור טעויות מחדש)
+ const saved=store?store[i]:null;
+ if(saved&&Array.isArray(saved.sel))saved.sel.forEach((s,pi)=>{if(s!=null)choose(pi,s,true);});
 }
 function flash(card){card.style.transition='none';card.style.boxShadow='0 0 0 2px var(--gold)';setTimeout(()=>{card.style.transition='';card.style.boxShadow='';},400);}
 
@@ -2533,7 +2552,7 @@ function renderTables(){
    <div id="tqhost"></div>
    <div style="height:24px"></div>
  </div>`;
- mountQuiz(document.getElementById('tqhost'),TABLES_QUIZ,{});
+ mountQuiz(document.getElementById('tqhost'),TABLES_QUIZ,{quizId:'tables'});
 }
 
 /* =================== GLOSSARY (מילון מושגים) =================== */
